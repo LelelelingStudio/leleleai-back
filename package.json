@@ -1,0 +1,9 @@
+{
+  "name": "leleleai-back",
+  "version": "1.0.0",
+  "description": "了了了AI 后端代理",
+  "main": "api/chat.js",
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  }
+}
