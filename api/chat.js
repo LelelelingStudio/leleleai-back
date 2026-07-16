@@ -1,6 +1,3 @@
-const fetch = require('node-fetch');
-
-// ⚠️ 环境变量名：DEEPSEEK_API_KEY（部署时在 Vercel 里设置）
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
