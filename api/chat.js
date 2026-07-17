@@ -1,12 +1,8 @@
-// api/chat.js
-// 使用 Edge Runtime，不受 10 秒超时限制
+// api/chat.js —— 最终版（Edge Runtime + 深度思考）
 export const runtime = 'edge';
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
-
 export default async function handler(req) {
-  // ===== 1. 处理 CORS 预检（OPTIONS） =====
+  // ===== 1. CORS（OPTIONS 预检） =====
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
@@ -18,136 +14,102 @@ export default async function handler(req) {
     });
   }
 
-  // ===== 2. 只允许 POST =====
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
-      headers: { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
 
-  // ===== 3. 检查 API Key =====
+  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
   if (!DEEPSEEK_API_KEY) {
-    console.error('❌ DeepSeek API Key 未配置');
-    return new Response(JSON.stringify({ error: 'DeepSeek API Key 未配置，请在 Vercel 环境变量中设置 DEEPSEEK_API_KEY' }), {
+    return new Response(JSON.stringify({ error: 'API Key 未配置' }), {
       status: 500,
-      headers: { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
 
-  // ===== 4. 解析请求体 =====
-  let messages, model, stream;
+  // ===== 2. 解析请求体（含深度思考开关） =====
+  let body;
   try {
-    const body = await req.json();
-    messages = body.messages;
-    model = body.model || 'deepseek-v4-flash';
-    stream = body.stream !== undefined ? body.stream : true;
+    body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+    return new Response(JSON.stringify({ error: '无效的 JSON' }), {
       status: 400,
-      headers: { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
+
+  const {
+    messages,
+    model = 'deepseek-v4-flash',
+    stream = true,
+    deep_think = false,   // 👈 深度思考开关，默认关闭
+  } = body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
-    return new Response(JSON.stringify({ error: 'messages 字段必须是一个非空数组' }), {
+    return new Response(JSON.stringify({ error: 'messages 不能为空' }), {
       status: 400,
-      headers: { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
 
-  console.log(`📨 收到请求，模型: ${model}，流式: ${stream}，消息数: ${messages.length}`);
+  // ===== 3. 构造请求体 =====
+  let chatMessages = [...messages];
 
+  // 如果开启深度思考，在系统提示词中加入“先推理再回答”的指令
+  if (deep_think) {
+    // 找到系统提示词（如果有）
+    const systemIndex = chatMessages.findIndex(m => m.role === 'system');
+    if (systemIndex !== -1) {
+      // 已有系统提示词，追加深度思考指令
+      chatMessages[systemIndex].content += '\n\n【深度思考模式】请在回答之前，先进行详细推理，将推理过程放在 <思考> 标签中，然后再给出最终答案。';
+    } else {
+      // 没有系统提示词，插入一条
+      chatMessages.unshift({
+        role: 'system',
+        content: '【深度思考模式】请在回答之前，先进行详细推理，将推理过程放在 <思考> 标签中，然后再给出最终答案。',
+      });
+    }
+  }
+
+  // ===== 4. 调用 DeepSeek API =====
   try {
-    // ===== 5. 构造 DeepSeek API 请求体 =====
-    const requestBody = {
-      model,
-      messages,
-      stream,
-      max_tokens: 2048,
-      temperature: 0.7,
-    };
-
-    // ===== 6. 调用 DeepSeek API =====
-    const response = await fetch(DEEPSEEK_API_URL, {
+    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({
+        model,
+        messages: chatMessages,
+        stream,
+        max_tokens: deep_think ? 4096 : 2048,  // 深度思考时允许更长输出
+        temperature: deep_think ? 0.5 : 0.7,    // 深度思考时更聚焦
+      }),
     });
 
-    // ===== 7. 处理流式响应 =====
     if (stream) {
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ DeepSeek 流式响应错误:', response.status, errorText);
-        return new Response(JSON.stringify({ 
-          error: `DeepSeek API 错误: ${response.status}`,
-          details: errorText,
-        }), {
-          status: response.status,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          },
-        });
-      }
-
-      // 将 DeepSeek 的流直接返回给客户端（SSE 格式）
       return new Response(response.body, {
         status: 200,
         headers: {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'X-Accel-Buffering': 'no',
           'Access-Control-Allow-Origin': '*',
         },
       });
-    }
-
-    // ===== 8. 非流式（几乎不会走这里） =====
-    const data = await response.json();
-    if (data.error) {
-      console.error('❌ DeepSeek 非流式错误:', data.error);
+    } else {
+      const data = await response.json();
       return new Response(JSON.stringify(data), {
-        status: response.status || 400,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
       });
     }
-
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
-    });
-  } catch (error) {
-    console.error('❌ 代理请求失败:', error.message);
-    return new Response(JSON.stringify({ error: '内部服务器错误，请稍后再试' }), {
+  } catch (err) {
+    return new Response(JSON.stringify({ error: '服务器内部错误' }), {
       status: 500,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
 }
