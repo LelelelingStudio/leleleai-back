@@ -26,7 +26,7 @@ module.exports = async (req, res) => {
 
   // ===== 5. 解析请求体 =====
   // 【修改1】stream 默认值从 false 改为 true，避免非流式超时
-  const { messages, model = 'deepseek-chat', stream = true } = req.body;
+  const { messages, model = 'deepseek-v4-flash', stream = true } = req.body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages 字段必须是一个非空数组' });
